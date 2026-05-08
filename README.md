@@ -1,54 +1,91 @@
-# README Template
+# AI System Compromise & Resilience Assessment (Finance Edition)
 
-Below is a template provided for use when building your README file for students.
+Capstone project for the Udacity AI Security nanodegree. You take the role of a **Junior AI Red Team Operator** at FinanceGuard Inc. and execute 5 adversarial attacks against a financial AI system (a receipt classifier and an expense-policy RAG chatbot).
 
-# Project Title
+> Full step-by-step instructions and the grading rubric live in the Udacity classroom. This repo contains only the scaffolded code and templates you'll work in.
 
-Project description goes here.
+## Repository Layout
+
+```
+.
+├── starter/             # Scaffolded project files — work here
+│   ├── classifier/      # Receipt CNN (given: model, train, evaluate, pretrained ckpt)
+│   ├── attacks/         # 5 attack scripts — YOU IMPLEMENT
+│   ├── rag_chatbot/     # Expense chatbot (given: app, rag, index, policies)
+│   ├── docs/            # Documentation templates — YOU FILL IN
+│   ├── .env.example     # API key configuration template
+│   ├── 06_trivy_report.json
+│   └── Dockerfile
+├── requirements.txt     # Pinned Python dependencies
+├── LICENSE.txt
+└── CODEOWNERS
+```
+
+## The 5 Attacks
+
+| # | Attack | Target | Objective |
+|---|--------|--------|-----------|
+| 1 | FGSM Evasion | Receipt Classifier | Craft adversarial images that fool the classifier |
+| 2 | Label-Flip Poisoning | Training Pipeline | Corrupt training data to degrade model accuracy |
+| 3 | Prompt Injection | RAG Chatbot | Override system instructions to manipulate behavior |
+| 4 | Data Exfiltration | RAG Vector Store | Extract confidential documents through the chatbot |
+| 5 | Supply Chain Analysis | Docker / Dependencies | Identify vulnerabilities via Trivy report and Dockerfile review |
 
 ## Getting Started
 
-Instructions for how to get a copy of the project running on your local machine.
+### Udacity Workspace
 
-### Dependencies
+The starter files are pre-loaded and dependencies are pre-installed. Skip ahead to the verification steps in the classroom instructions.
 
-```
-Examples here
-```
+### Local Setup
 
-### Installation
+Targets **Python 3.12.13**.
 
-Step by step explanation of how to get a dev environment running.
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate          # macOS/Linux
+# .venv\Scripts\activate           # Windows
 
-List out the steps
-
-```
-Give an example here
+pip install -r requirements.txt
 ```
 
-## Testing
+Configure your classroom API key:
 
-Explain the steps needed to run any automated tests
-
-### Break Down Tests
-
-Explain what each test does and why
-
-```
-Examples here
+```bash
+cp starter/.env.example starter/rag_chatbot/.env
+# edit starter/rag_chatbot/.env to set OPENAI_API_KEY and OPENAI_BASE_URL
 ```
 
-## Project Instructions
+Verify the provided model and chatbot work end-to-end:
 
-This section should contain all the student deliverables for this project.
+```bash
+cd starter/classifier
+python evaluate.py --model-path checkpoints/receipt_cnn_clean.pt --test-dir balanced_data/test
+# Expected: ~94% accuracy
 
-## Built With
+cd ../rag_chatbot
+python build_index.py
+python app.py &
+curl -X POST http://localhost:5001/chat \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is the meal expense limit?"}'
+```
 
-* [Item1](www.item1.com) - Description of item
-* [Item2](www.item2.com) - Description of item
-* [Item3](www.item3.com) - Description of item
+## What You Implement vs. What's Given
 
-Include all items used to build project.
+**You implement** — the 5 attack scripts in `starter/attacks/`.
+
+**Given to you** — do not modify the classifier, RAG chatbot, policy documents, Trivy report, or Dockerfile. They are the system under test.
+
+**You write** — the documentation in `starter/docs/` (Red Team Charter, Vulnerability Log, per-attack results, Executive Risk Summary, Reproduction Steps) using the provided templates.
+
+## Deliverables
+
+1. 5 completed attack scripts in `starter/attacks/`
+2. Filled-in documentation files in `starter/docs/`
+3. Attack output files (JSON results from running your scripts)
+
+Grading criteria are in the classroom rubric.
 
 ## License
 
