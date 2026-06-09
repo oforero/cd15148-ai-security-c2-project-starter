@@ -15,8 +15,8 @@ Capstone project for the Udacity AI Security nanodegree. You take the role of a 
 │   ├── docs/            # Documentation templates — YOU FILL IN
 │   ├── .env.example     # API key configuration template
 │   ├── 06_trivy_report.json
+│   ├── requirements.txt # Pinned Python dependencies
 │   └── Dockerfile
-├── requirements.txt     # Pinned Python dependencies
 ├── LICENSE.txt
 └── CODEOWNERS
 ```
