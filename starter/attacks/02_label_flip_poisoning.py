@@ -23,7 +23,7 @@ CLASSES = ["receipt", "non_receipt"]
 RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results", "02_label_flip")
 
 
-def poison_dataset(source_root, target_root, flip_ratio=0.05, seed=42):
+def poison_dataset(source_root, target_root, flip_ratio=0.05, seed=42, target_class=None):
     """
     Copy dataset and flip a percentage of training labels.
 
@@ -65,24 +65,34 @@ def poison_dataset(source_root, target_root, flip_ratio=0.05, seed=42):
     total_train = sum(len(files) for files in original_files.values())
     total_flipped = 0
 
-    # Flip only TRAINING labels; the test set is left untouched.
-    for class_name in CLASSES:
-        files = original_files[class_name]
-        n_flip = int(len(files) * flip_ratio)
-        to_flip = random.sample(files, n_flip)
-
+    def _flip(class_name, n_flip):
+        """Move n_flip images from class_name into the opposite class folder."""
+        chosen = random.sample(original_files[class_name], n_flip)
         opposite_dir = os.path.join(train_root, opposite[class_name])
-        for filename in to_flip:
+        for filename in chosen:
             src = os.path.join(train_root, class_name, filename)
             # Encode the ORIGINAL class in the prefix so the file's true origin
             # is recoverable (visualize_flip relies on this) and collisions are avoided.
             dst = os.path.join(opposite_dir, f"flipped_{class_name}_{filename}")
             shutil.move(src, dst)
+        return n_flip
 
-        total_flipped += n_flip
+    # Flip only TRAINING labels; the test set is left untouched.
+    if target_class:
+        # Targeted attack: flip flip_ratio of the TOTAL training labels, all drawn
+        # from a single class. This biases the model against target_class instead
+        # of adding symmetric noise it can average out, so degradation is stronger.
+        n_flip = min(int(total_train * flip_ratio), len(original_files[target_class]))
+        total_flipped = _flip(target_class, n_flip)
+    else:
+        # Symmetric attack: flip flip_ratio of EACH class in both directions.
+        for class_name in CLASSES:
+            total_flipped += _flip(class_name, int(len(original_files[class_name]) * flip_ratio))
 
     # Summary
     print("\n**Label-Flip Poisoning Summary**")
+    mode = f"targeted ({target_class} -> {opposite[target_class]})" if target_class else "symmetric (both directions)"
+    print(f"Mode: {mode}")
     print(f"Flip rate requested: {flip_ratio:.2%} | seed: {seed}")
     print(f"Total training images: {total_train}")
     print(f"Labels flipped:        {total_flipped}")
@@ -208,9 +218,14 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--visualize-count", type=int, default=5)
     parser.add_argument("--results-dir", default=RESULTS_DIR)
+    parser.add_argument(
+        "--target-class", choices=CLASSES, default=None,
+        help="Flip only this class into its opposite (targeted attack). "
+             "Omit for a symmetric flip of both classes.",
+    )
     args = parser.parse_args()
 
-    poison_dataset(args.source, args.target, args.flip_rate, args.seed)
+    poison_dataset(args.source, args.target, args.flip_rate, args.seed, args.target_class)
     visualize_flip(
         args.source,
         args.target,
