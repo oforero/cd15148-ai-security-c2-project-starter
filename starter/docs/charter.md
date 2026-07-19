@@ -11,9 +11,7 @@
 
 ## Objectives
 
-<!-- List the 5 attack vectors you will test and what each aims to demonstrate -->
-
-1. **FGSM Evasion** against the Receipt Classifier: demonstrate that small, near-invisible pixel perturbations crafted from the model's own gradients cause the CNN to misclassify valid receipts.
+1. **FGSM Evasion** against the Receipt Classifier: demonstrate that small, near-invisible pixel perturbations uisng the model's gradients cause the CNN to misclassify valid receipts.
 2. **Label-Flip Data Poisoning** against the training pipeline: demonstrate that corrupting a small fraction of training labels measurably degrades model accuracy.
 3. **Prompt Injection** against the RAG Chatbot: demonstrate that crafted inputs can override the system instructions and manipulate the assistant's behavior.
 4. **Data Exfiltration** from the RAG vector store: demonstrate that confidential policy documents can be retrieved through ordinary chatbot queries.
@@ -22,7 +20,6 @@
 ## Scope
 
 ### In Scope
-<!-- List all systems and components you will test -->
 
 - **Receipt Classifier (CNN)**: the image classification model and its training pipeline (`classifier/`).
 - **Expense Policy RAG Chatbot**: the LLM assistant and its FAISS vector store (`rag_chatbot/`).
@@ -30,7 +27,6 @@
 - Only the provided lab environment and its bundled sample data and policy documents.
 
 ### Out of Scope
-<!-- List what is explicitly excluded -->
 
 - FinanceGuard production systems, live customer data, and real employee records.
 - Third-party services and external APIs beyond the provided chatbot endpoint.
@@ -39,8 +35,6 @@
 - Modification of the provided infrastructure code; all attacks run against it unchanged.
 
 ## Rules of Engagement
-
-<!-- List the constraints and ethical guidelines for your testing -->
 
 1. Testing is confined to the provided lab environment; no attacks touch live or production systems.
 2. No real personal, financial, or employee data is used, exfiltrated, or retained.
@@ -52,8 +46,6 @@
 
 ## Success Criteria
 
-<!-- Define what constitutes a successful test for each attack vector -->
-
 | Attack Vector | Success Metric |
 |---------------|---------------|
 | FGSM Evasion | Adversarial accuracy measurably decreases across at least 3 epsilon values, showing progressive degradation; results saved to JSON. |
@@ -63,8 +55,6 @@
 | Supply Chain Analysis | Trivy vulnerabilities counted by severity, specific HIGH CVEs named with affected package and fix, and at least 3 Dockerfile issues identified, each with a concrete remediation. |
 
 ## Deliverables
-
-<!-- List all documents and artifacts you will produce -->
 
 - Five completed attack scripts in `attacks/` (`01_fgsm_evasion.py` through `05_supply_chain_analysis.py`).
 - Vulnerability Log (VUL-001 through VUL-005).
