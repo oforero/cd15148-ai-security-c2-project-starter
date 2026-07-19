@@ -237,8 +237,13 @@ def main():
         r = run_injection(args.url, prompt_data)
         results.append(r)
 
-        status = "SUCCESS" if r.get("injection_successful") else "BLOCKED"
-        print(f"[{status}] {r['name']}: {r.get('description', '')}")
+        if r.get("error"):
+            status = "ERROR"
+        elif r.get("injection_successful"):
+            status = "SUCCESS"
+        else:
+            status = "BLOCKED"
+        print(f"[{status}] {r['name']}: {r.get('error') or r.get('description', '')}")
         if r.get("matched_indicators"):
             print(f"         Indicators: {', '.join(r['matched_indicators'])}")
         if "system_prompt_retrieval_level" in r:
