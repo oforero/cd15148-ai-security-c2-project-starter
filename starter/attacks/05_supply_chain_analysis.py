@@ -11,6 +11,7 @@ Usage:
 import json
 import argparse
 import os
+import re
 
 RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results", "05_supply_chain")
 
@@ -38,12 +39,23 @@ def parse_trivy_report(path):
 
     vulns = []
 
-    # TODO: Iterate through data["Results"] and extract vulnerabilities
-    # For each result, iterate through result["Vulnerabilities"]
-    # Extract relevant fields into a dictionary and append to vulns list
-    # Fields to extract: id, severity, package, installed_version,
-    #                     fixed_version, title, description (first 200 chars),
-    #                     target, target_type
+    for result in data.get("Results", []):
+        target = result.get("Target", "")
+        target_type = result.get("Type", "")
+        for v in result.get("Vulnerabilities") or []:
+            description = v.get("Description", "") or ""
+            vulns.append({
+                "id": v.get("VulnerabilityID", ""),
+                "severity": v.get("Severity", "UNKNOWN"),
+                "package": v.get("PkgName", ""),
+                "installed_version": v.get("InstalledVersion", ""),
+                # FixedVersion is absent/None when no fix is published yet.
+                "fixed_version": v.get("FixedVersion", "") or "",
+                "title": v.get("Title", ""),
+                "description": description[:200],
+                "target": target,
+                "target_type": target_type,
+            })
 
     return vulns
 
@@ -71,14 +83,107 @@ def analyze_dockerfile(path):
     lines = content.strip().split("\n")
 
     issues = []
+    stripped = [line.strip() for line in lines]
 
-    # TODO: Implement Dockerfile analysis
-    # Check each security concern listed above
-    # For each issue found, append a dictionary with:
-    #   - "issue": short description
-    #   - "severity": "HIGH", "MEDIUM", or "LOW"
-    #   - "detail": explanation of the risk
-    #   - "recommendation": how to fix it
+    def has_directive(name):
+        return any(line.upper().startswith(name + " ") for line in stripped)
+
+    # 1. Running as root (no USER directive) -- HIGH
+    if not has_directive("USER"):
+        issues.append({
+            "issue": "Container runs as root (no USER directive)",
+            "severity": "HIGH",
+            "detail": (
+                "With no USER directive the process runs as root (UID 0). If the app is "
+                "compromised (for example via RCE in a dependency), the attacker has root "
+                "inside the container, which widens blast radius and eases container escape."
+            ),
+            "recommendation": (
+                "Add a non-root user and switch to it before CMD, e.g. "
+                "'RUN useradd -m appuser' then 'USER appuser'."
+            ),
+        })
+
+    # 2. Unpinned base image (no SHA256 digest) -- MEDIUM
+    from_lines = [line for line in stripped if line.upper().startswith("FROM ")]
+    if from_lines and not any("@sha256:" in line for line in from_lines):
+        issues.append({
+            "issue": "Base image pinned to a mutable tag, not a digest",
+            "severity": "MEDIUM",
+            "detail": (
+                "FROM python:3.11-slim references a mutable tag. The image behind the tag can "
+                "change, so builds are not reproducible and a poisoned or trojanized upstream "
+                "tag would be pulled silently."
+            ),
+            "recommendation": (
+                "Pin the base image by digest, e.g. FROM python:3.11-slim@sha256:<digest>, and "
+                "update it deliberately."
+            ),
+        })
+
+    # 3. COPY . copies the whole build context -- MEDIUM
+    for tokens in (line.split() for line in stripped):
+        if len(tokens) >= 2 and tokens[0].upper() == "COPY" and tokens[1] == ".":
+            issues.append({
+                "issue": "COPY . copies the entire build context into the image",
+                "severity": "MEDIUM",
+                "detail": (
+                    "COPY . /app pulls everything in the build context into the image, which can "
+                    "include secrets (.env), .git history, local credentials, and test data, all "
+                    "readable by anyone who pulls the image."
+                ),
+                "recommendation": (
+                    "Copy only the paths the app needs and add a .dockerignore excluding .env, "
+                    ".git, results/, and data caches."
+                ),
+            })
+            break
+
+    # 4. No HEALTHCHECK -- LOW
+    if not has_directive("HEALTHCHECK"):
+        issues.append({
+            "issue": "No HEALTHCHECK defined",
+            "severity": "LOW",
+            "detail": (
+                "Without a HEALTHCHECK the orchestrator cannot tell a hung or degraded container "
+                "from a healthy one, so a compromised or crashed process can keep serving traffic."
+            ),
+            "recommendation": (
+                "Add a HEALTHCHECK that probes the app, e.g. curl the /health endpoint on port 5001."
+            ),
+        })
+
+    # 5. Build tools left in the production image -- MEDIUM
+    build_tools = [t for t in ("build-essential", "gcc", "g++", "make") if re.search(rf"\b{re.escape(t)}\b", content)]
+    if build_tools:
+        issues.append({
+            "issue": f"Build tools shipped in production image ({', '.join(build_tools)})",
+            "severity": "MEDIUM",
+            "detail": (
+                "Compilers and build tooling remain in the final image. They enlarge the attack "
+                "surface and give an attacker who lands in the container the means to build and "
+                "run further tooling."
+            ),
+            "recommendation": (
+                "Use a multi-stage build: compile in a builder stage and copy only the runtime "
+                "artifacts into a clean final image with no build tools."
+            ),
+        })
+
+    # 6. Unnecessary tools (curl, git) in production -- LOW
+    extra_tools = [t for t in ("curl", "git") if re.search(rf"\b{t}\b", content)]
+    if extra_tools:
+        issues.append({
+            "issue": f"Unnecessary tools present in production image ({', '.join(extra_tools)})",
+            "severity": "LOW",
+            "detail": (
+                "Tools such as curl and git are useful to an attacker for pulling payloads or "
+                "exfiltrating data and are not needed at runtime by the app."
+            ),
+            "recommendation": (
+                "Remove curl and git from the final image, or install them only in a build stage."
+            ),
+        })
 
     return issues
 
@@ -97,13 +202,71 @@ def generate_report(vulns, dockerfile_issues):
         sev = v.get("severity", "UNKNOWN")
         severity_counts[sev] = severity_counts.get(sev, 0) + 1
 
+    high_vulns = [v for v in vulns if v.get("severity") == "HIGH"]
+    # Surface HIGH CVEs that actually have a fix first: those are the actionable ones.
+    high_vulns_sorted = sorted(high_vulns, key=lambda v: (v.get("fixed_version", "") == "",))
+    python_vulns = [v for v in vulns if v.get("target_type") == "python-pkg"]
+    high_fixable = [v for v in high_vulns if v.get("fixed_version")]
+
+    # Overall risk: CRITICAL if any CRITICAL CVE, else HIGH if there are HIGH CVEs
+    # or a HIGH Dockerfile issue, else MEDIUM/LOW.
+    dockerfile_high = any(i["severity"] == "HIGH" for i in dockerfile_issues)
+    if severity_counts.get("CRITICAL"):
+        overall_risk = "CRITICAL"
+    elif severity_counts.get("HIGH") or dockerfile_high:
+        overall_risk = "HIGH"
+    elif severity_counts.get("MEDIUM"):
+        overall_risk = "MEDIUM"
+    else:
+        overall_risk = "LOW"
+
+    key_concerns = []
+    if severity_counts.get("HIGH"):
+        key_concerns.append(
+            f"{severity_counts['HIGH']} HIGH severity CVEs in the base image and packages "
+            f"({len(high_fixable)} have a fix available)."
+        )
+    if dockerfile_high:
+        key_concerns.append("Container runs as root, so any code execution becomes root in the container.")
+    if python_vulns:
+        key_concerns.append(f"{len(python_vulns)} vulnerabilities in bundled Python packages.")
+    if any(i["issue"].startswith("COPY .") for i in dockerfile_issues):
+        key_concerns.append("COPY . risks baking secrets and source history into the shipped image.")
+
+    # Prioritized remediation plan: Dockerfile issues ordered by severity, then
+    # the fixable HIGH CVEs as a patch batch.
+    severity_rank = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+    remediation_plan = []
+    for i in sorted(dockerfile_issues, key=lambda x: severity_rank.get(x["severity"], 3)):
+        remediation_plan.append({
+            "priority": i["severity"],
+            "area": "Dockerfile",
+            "action": i["recommendation"],
+        })
+    if high_fixable:
+        remediation_plan.append({
+            "priority": "HIGH",
+            "area": "Dependencies",
+            "action": (
+                f"Patch the {len(high_fixable)} HIGH CVEs that have fixed versions by rebuilding "
+                "on an updated base image and upgrading the affected packages."
+            ),
+        })
+
     report = {
         "summary": {
             "total_vulnerabilities": len(vulns),
             "severity_breakdown": severity_counts,
             "dockerfile_issues": len(dockerfile_issues),
         },
-        # TODO: Add the remaining report sections
+        "high_severity_vulnerabilities": high_vulns_sorted[:15],
+        "python_specific": python_vulns,
+        "dockerfile_issues": dockerfile_issues,
+        "risk_assessment": {
+            "overall_risk": overall_risk,
+            "key_concerns": key_concerns,
+        },
+        "prioritized_remediation": remediation_plan,
     }
     return report
 
@@ -136,18 +299,16 @@ def main():
     report = generate_report(vulns, dockerfile_issues)
 
     # Print summary
-    print(f"\n{'=' * 50}")
-    print("  SUPPLY CHAIN RISK ASSESSMENT")
-    print(f"{'=' * 50}")
+    print("\n**SUPPLY CHAIN RISK ASSESSMENT**")
     s = report["summary"]
-    print(f"\n  Total vulnerabilities: {s['total_vulnerabilities']}")
+    print(f"  Overall risk: {report['risk_assessment']['overall_risk']}")
+    print(f"  Total vulnerabilities: {s['total_vulnerabilities']}")
     for sev in ["CRITICAL", "HIGH", "MEDIUM", "LOW"]:
         count = s["severity_breakdown"].get(sev, 0)
         if count:
             print(f"    {sev}: {count}")
 
-    print(f"\n  Dockerfile issues: {s['dockerfile_issues']}")
-    print(f"{'=' * 50}")
+    print(f"  Dockerfile issues: {s['dockerfile_issues']}")
 
     with open(args.output, "w") as f:
         json.dump(report, f, indent=2)
