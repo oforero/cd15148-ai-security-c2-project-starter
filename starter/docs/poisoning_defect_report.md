@@ -1,69 +1,55 @@
-# Defect Report: Attack 2 (Label-Flip Poisoning) Success Criterion Is Not Achievable
+# Defect Report: Attack 2 (Label-Flip Poisoning) Default Configuration Is Fragile
 
 ## Summary
 
-The rubric for Attack 2 requires the poisoned model to show an accuracy drop of **at least 5 percentage points** versus the clean model, produced by flipping **at most 10% of training labels**. Following the classroom's own instructions produces the **opposite** result: the poisoned model is consistently as good as or better than the clean model. When the comparison is run rigorously (multiple training runs per condition), no label-flip strategy produces a drop, because the clean model's training variance is roughly three times larger than the 5-point effect the rubric expects to measure.
+The Attack 2 success criterion (a >= 5-point accuracy drop from a <= 10% label flip) **is achievable**, but only under a controlled setup: deterministic training, a fair self-trained baseline, and a model-informed flip strategy. A model-informed confidence-ranked flip of about 10% of labels produces a reproducible 5.90-point accuracy drop (see `poisoning_results.md`).
 
-This is a defect in the exercise design, not in a learner's implementation.
+The defect is that the exercise as scaffolded does not steer learners to that setup, and the most natural reading of the instructions actively works against it. Followed literally, the default path (a 5% random symmetric flip, compared against the shipped checkpoint, on nondeterministic GPU hardware) does not reliably show a drop and often shows the poisoned model scoring higher than clean. Learners who do exactly what the scaffold suggests will conclude, wrongly, that their attack failed.
+
+This is a defect in the exercise design and defaults, not in a correct implementation.
 
 ## Environment
 
 - Project: AI System Compromise & Resilience Assessment (Finance Edition), `cd15148-ai-security-c2-project-starter`.
 - Component: `starter/classifier` (ReceiptCNN, ~26K params) trained by the provided `starter/classifier/train.py` for 15 epochs.
-- Attack: `starter/attacks/02_label_flip_poisoning.py`.
+- Attack: `starter/attacks/02_label_flip_poisoning.py` (implements `random`, `targeted`, and `confidence` strategies).
 
-## Steps to Reproduce
+## What Achieves the Criterion (and What the Defaults Do Instead)
 
-Following the classroom "Run, Retrain, and Compare" instructions exactly:
+**Achieves it:** deterministic training (CPU, seed 42) + fair self-trained baseline + confidence-ranked flip at ~10%. Result: accuracy 0.9667 to 0.9077, a 5.90-point drop, identical across three runs.
 
-```bash
-cd starter/attacks
-python 02_label_flip_poisoning.py                 # 5% symmetric random flip (default)
-cd ../classifier
-python train.py --data-dir poisoned_data --checkpoint-name receipt_cnn_poisoned.pt
-python evaluate.py --model-path checkpoints/receipt_cnn_poisoned.pt --test-dir balanced_data/test
-python evaluate.py --model-path checkpoints/receipt_cnn_clean.pt    --test-dir balanced_data/test
-```
+**The scaffold defaults do not:**
 
-## Observed vs Expected
+1. **Default flip rate and strategy are too weak.** The script defaults to a 5% random symmetric flip. Even at the 10% cap, the random flip lands at a 4.36-point drop and a plain targeted flip at 4.62, both short of 5. Only the model-informed confidence flip clears the bar. The instructions do not point learners toward a strong enough attack.
 
-**Expected:** poisoned accuracy is at least 5 points below clean accuracy.
+2. **The suggested baseline is confounded.** The classroom compare step benchmarks a freshly retrained poisoned model against the shipped `receipt_cnn_clean.pt` checkpoint, whose training procedure is unknown and which is a weaker run than a fresh 15-epoch train. Following that literally produced a poisoned model scoring 0.9744 against the checkpoint's 0.9231, a poisoned model that looks 5 points **better** than clean.
 
-**Observed (single run, as instructed):** the freshly trained poisoned model scored **0.9744** while the provided clean checkpoint scored **0.9231**. The poisoned model was **5.1 points better**, the opposite of the requirement.
+3. **Training is nondeterministic on GPU/MPS.** `train.py` sets `SEED = 42` and seeds `random`, `numpy`, and `torch`, but does not enable deterministic algorithms (`torch.use_deterministic_algorithms(True)`, `cudnn.deterministic = True`, `cudnn.benchmark = False`) or seed the DataLoader workers. On GPU/MPS, identical runs vary widely: an earlier multi-run of the clean baseline spanned 0.8282 to 0.9744, about 15 points across three identical runs. That is roughly 3x the 5-point effect, so on that hardware training noise can hide or reverse the poisoning signal. (On CPU the same code is deterministic, which is why the controlled result is reproducible there.)
 
-**Observed (rigorous, 3 runs per condition at the 10% cap):**
+## Observed Result (Controlled, Deterministic, CPU)
 
-| Condition | runs | mean accuracy | min | max | drop vs clean |
-|-----------|------|---------------|-----|-----|---------------|
-| clean (self-trained) | 3 | 0.8795 | 0.8282 | 0.9744 | baseline |
-| random flip | 3 | 0.9274 | 0.9154 | 0.9359 | -4.79 pts (better) |
-| targeted flip | 3 | 0.9564 | 0.9513 | 0.9615 | -7.69 pts (better) |
-| confidence-based flip | 3 | 0.9316 | 0.9308 | 0.9333 | -5.21 pts (better) |
+| Condition | Accuracy | Recall | F1 | Accuracy drop vs clean |
+|-----------|----------|--------|-----|------------------------|
+| clean (self-trained) | 0.9667 | 0.9385 | 0.9657 | baseline |
+| random flip (10%) | 0.9231 | 0.8769 | 0.9194 | 4.36 pts |
+| targeted flip (10%) | 0.9205 | 0.8462 | 0.9141 | 4.62 pts |
+| confidence flip (10%) | 0.9077 | 0.8564 | 0.9027 | 5.90 pts |
 
-No strategy, including a model-informed confidence-ranked flip designed to maximize damage, produced any drop. All drops are negative.
-
-## Root Cause
-
-1. **Nondeterministic training dominates the signal.** `train.py` sets `SEED = 42` and seeds `random`, `numpy`, and `torch`, but does not enable deterministic algorithms (`torch.use_deterministic_algorithms(True)`, `cudnn.deterministic = True`, `cudnn.benchmark = False`) or seed DataLoader workers. On GPU, identical runs therefore vary widely. The clean baseline above ranges from **0.8282 to 0.9744, a 14.6-point spread across three identical runs**. That is about 3x the 5-point effect the rubric asks learners to measure, so the measurement is dominated by noise.
-
-2. **The model is robust to the allowed budget.** A small CNN trained on ~1150 images shrugs off <=10% label noise; roughly 90% clean signal dominates gradient descent, so flipped labels are effectively averaged out.
-
-3. **Baseline mismatch in the instructions.** The classroom's compare step benchmarks a freshly retrained poisoned model against the shipped `receipt_cnn_clean.pt` checkpoint, whose training procedure is unknown and which is a weaker run than a fresh 15-epoch train. This alone can invert the comparison.
-
-4. **The symmetric flip can be self-correcting.** The clean model under-predicts receipts (recall ~0.85), so the non_receipt to receipt half of a symmetric flip nudges the boundary in the direction that *raises* accuracy.
+Each condition was trained three times; all three runs were bit-identical, so these numbers are exactly reproducible on CPU.
 
 ## Impact
 
-Learners cannot satisfy the Attack 2 success criterion by following the instructions, and cannot satisfy it by any compliant strategy on this model and dataset. The only way to "pass" is to submit a single lucky run where the clean model happened to train well and the poisoned model happened to train poorly, which rewards noise rather than understanding.
+A learner who follows the scaffold literally (default 5% random flip, compared to the shipped checkpoint, on the workspace GPU) will see no drop, or an inverted result, and reasonably conclude the exercise is broken. Reaching the required drop takes three departures from the defaults that the instructions do not call out: a stronger model-informed strategy, a fair self-trained baseline, and deterministic training. The criterion is sound; the scaffold does not lead learners to a configuration where it holds.
 
 ## Suggested Fixes
 
-1. **Make training deterministic** in `train.py` (`torch.use_deterministic_algorithms(True)`, `cudnn.deterministic = True`, `cudnn.benchmark = False`, seeded DataLoader generator). This removes the ~15-point variance so any real poisoning effect becomes measurable.
+1. **Make training deterministic** in `train.py` (`torch.use_deterministic_algorithms(True)`, `cudnn.deterministic = True`, `cudnn.benchmark = False`, seeded DataLoader generator), so the poisoning effect is not swamped by run-to-run variance on GPU.
 2. **Pin the baseline** to a self-trained clean model produced by the same `train.py` invocation and seed, not the shipped checkpoint, so the comparison is controlled.
-3. **Make the effect exceed the budget:** raise the flip-rate cap, specify a targeted or informed flip in the instructions, use more epochs or a more sensitive model, or lower the required drop (for example to >= 2 points).
-4. **Require multiple runs** and compare means, since a single run sits inside the noise band.
+3. **Steer the attack strength.** Point learners at a targeted or model-informed flip at the full 10% budget rather than a 5% random flip, or lower the required drop, so a correct attack clears the criterion without relying on lucky variance.
+4. **State the expected magnitude and require reproducibility** (for example, report identical results across repeated runs) so a single lucky run is neither necessary nor sufficient.
 
 ## Evidence Artifacts
 
 - `starter/run_poisoning_experiment.sh` and `starter/aggregate_poisoning_results.py` reproduce the multi-run comparison table above.
 - Per-run metrics and confusion matrices under `starter/classifier/results/poisoning_experiment/`.
+- Full before/after analysis in `starter/docs/poisoning_results.md`.
